@@ -33,12 +33,10 @@ class BackendConfig(BaseSettings):
     group_catalog_sync: str = "catalog_sync_processors"
     consumer_name: str = "backend_worker_1"
 
-    alert_grace_seconds: int = 120
     duration_deviation_warning_percent: float = 150.0
     refresh_current_status_seconds: int = 15
     refresh_performance_seconds: int = 300
     refresh_broken_url_seconds: int = 600
-    refresh_incidence_timeline_seconds: int = 300
     refresh_broken_url_priority_seconds: int = 600
     app_name: str = "ETL Observability Backend"
     app_log_level: str = "INFO"
@@ -67,12 +65,10 @@ class BackendConfig(BaseSettings):
             group_backend_processors=os.getenv("GROUP_BACKEND_PROCESSORS", "backend_processors"),
             group_catalog_sync=os.getenv("GROUP_CATALOG_SYNC", "catalog_sync_processors"),
             consumer_name=os.getenv("CONSUMER_NAME", "backend_worker_1"),
-            alert_grace_seconds=int(os.getenv("ALERT_GRACE_SECONDS", "120")),
             duration_deviation_warning_percent=float(os.getenv("DURATION_DEVIATION_WARNING_PERCENT", "150.0")),
             refresh_current_status_seconds=int(os.getenv("REFRESH_CURRENT_STATUS_SECONDS", "15")),
             refresh_performance_seconds=int(os.getenv("REFRESH_PERFORMANCE_SECONDS", "300")),
             refresh_broken_url_seconds=int(os.getenv("REFRESH_BROKEN_URL_SECONDS", "600")),
-            refresh_incidence_timeline_seconds=int(os.getenv("REFRESH_INCIDENCE_TIMELINE_SECONDS", "300")),
             refresh_broken_url_priority_seconds=int(os.getenv("REFRESH_BROKEN_URL_PRIORITY_SECONDS", "600")),
             app_name=os.getenv("APP_NAME", "ETL Observability Backend"),
             app_log_level=os.getenv("APP_LOG_LEVEL", "INFO"),

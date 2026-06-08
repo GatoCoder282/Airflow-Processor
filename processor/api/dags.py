@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 
+from ._pagination import clamp_pagination
+
 router = APIRouter(prefix="/dags", tags=["dags"])
 
 
@@ -17,6 +19,7 @@ async def list_dags(
     limit: int = Query(100),
     offset: int = Query(0),
 ):
+    limit, offset = clamp_pagination(limit, offset)
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
         query = "SELECT * FROM monitoring.dag_current_status WHERE region = $1 AND is_active = true"
@@ -55,6 +58,7 @@ async def get_failed_dag_history(
     limit: int = Query(200),
     offset: int = Query(0),
 ):
+    limit, offset = clamp_pagination(limit, offset)
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
         conditions = ["region = $1", "failed_at >= NOW() - ($2 || ' days')::INTERVAL"]

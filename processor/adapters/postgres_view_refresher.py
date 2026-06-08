@@ -21,10 +21,6 @@ class PostgresViewRefresher(IViewRefresher):
         async with self._pool.acquire() as conn:
             await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.broken_url_summary")
 
-    async def refresh_incidence_timeline(self) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.incidence_timeline")
-
     async def refresh_broken_url_priority(self) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.broken_url_priority")

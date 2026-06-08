@@ -15,15 +15,12 @@ class FakeRefresher:
 
     async def refresh_performance_stats(self) -> None:
         self.calls.append("performance_stats")
-
-    async def refresh_broken_url_summary(self) -> None:
-        self.calls.append("broken_url")
-
-    async def refresh_incidence_timeline(self) -> None:
-        self.calls.append("incidence_timeline")
         if self.fail_next:
             self.fail_next = False
             raise RuntimeError("boom")
+
+    async def refresh_broken_url_summary(self) -> None:
+        self.calls.append("broken_url")
 
     async def refresh_broken_url_priority(self) -> None:
         self.calls.append("broken_url_priority")
@@ -50,8 +47,8 @@ async def test_scheduler_tracks_refresh_errors_without_crashing() -> None:
     refresher.fail_next = True
     scheduler = ViewScheduler(refresher)
 
-    await scheduler._maybe_refresh("incidence_timeline", refresher.refresh_incidence_timeline, now=1000.0)
+    await scheduler._maybe_refresh("performance_stats", refresher.refresh_performance_stats, now=1000.0)
 
     metrics = scheduler.get_metrics()
-    assert metrics["incidence_timeline"]["error_count"] == 1
-    assert metrics["incidence_timeline"]["last_error"] == "boom"
+    assert metrics["performance_stats"]["error_count"] == 1
+    assert metrics["performance_stats"]["last_error"] == "boom"

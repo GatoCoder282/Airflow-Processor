@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import logging
 
@@ -73,6 +72,7 @@ class PostgresMonitoringRepository(IMonitoringRepository):
                     start_date = EXCLUDED.start_date,
                     end_date = EXCLUDED.end_date,
                     duration_seconds = EXCLUDED.duration_seconds,
+                    sla_miss = EXCLUDED.sla_miss,
                     upstream_task_id = COALESCE(EXCLUDED.upstream_task_id, monitoring.task_instance.upstream_task_id),
                     downstream_task_ids = COALESCE(EXCLUDED.downstream_task_ids, monitoring.task_instance.downstream_task_ids),
                     log_excerpt = COALESCE(EXCLUDED.log_excerpt, monitoring.task_instance.log_excerpt),
@@ -124,40 +124,50 @@ class PostgresMonitoringRepository(IMonitoringRepository):
                 dag_id, run_id, region, task_id, task_state,
             )
 
+    @staticmethod
+    async def _insert_alert(
+        conn: asyncpg.Connection,
+        alert: AlertToSend,
+        suppressed: bool = False,
+        suppression_reason: str | None = None,
+    ) -> int:
+        """INSERT de una alerta usando la conexión recibida (sin adquirir una nueva)."""
+        row = await conn.fetchrow(
+            """
+            INSERT INTO monitoring.alert (
+                region, severity, alert_type, incident_category,
+                title, message, exception_snippet,
+                event_type_source, dedup_key,
+                root_cause_task_id, id_report,
+                dag_id, run_id, task_id,
+                resolved, suppressed, suppression_reason,
+                occurrence_count, first_seen_at, last_seen_at,
+                created_at, updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,FALSE,$15,$16,1,NOW(),NOW(),NOW(),NOW())
+            RETURNING id
+            """,
+            alert.region,
+            alert.severity.value,
+            alert.alert_type.value,
+            alert.incident_category.value,
+            alert.title,
+            alert.message,
+            alert.exception_snippet,
+            alert.event_type_source,
+            alert.dedup_key,
+            alert.root_cause_task_id,
+            alert.id_report,
+            alert.dag_id,
+            alert.run_id,
+            alert.task_id,
+            suppressed,
+            suppression_reason,
+        )
+        return int(row[0]) if row else 0
+
     async def insert_alert(self, alert: AlertToSend, suppressed: bool = False, suppression_reason: str | None = None) -> int:
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO monitoring.alert (
-                    region, severity, alert_type, incident_category,
-                    title, message, exception_snippet,
-                    event_type_source, dedup_key,
-                    root_cause_task_id, id_report,
-                    dag_id, run_id, task_id,
-                    resolved, suppressed, suppression_reason,
-                    occurrence_count, first_seen_at, last_seen_at,
-                    created_at, updated_at
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,FALSE,$15,$16,1,NOW(),NOW(),NOW(),NOW())
-                RETURNING id
-                """,
-                alert.region,
-                alert.severity.value,
-                alert.alert_type.value,
-                alert.incident_category.value,
-                alert.title,
-                alert.message,
-                alert.exception_snippet,
-                alert.event_type_source,
-                alert.dedup_key,
-                alert.root_cause_task_id,
-                alert.id_report,
-                alert.dag_id,
-                alert.run_id,
-                alert.task_id,
-                suppressed,
-                suppression_reason,
-            )
-            return int(row[0]) if row else 0
+            return await self._insert_alert(conn, alert, suppressed, suppression_reason)
 
     async def upsert_alert_occurrence(
         self,
@@ -172,50 +182,55 @@ class PostgresMonitoringRepository(IMonitoringRepository):
         ])
         alert.dedup_key = dedup_key
 
+        # Una sola conexión + transacción: el SELECT...FOR UPDATE serializa el
+        # incremento de occurrence_count (cierra la carrera TOCTOU) y el INSERT se hace
+        # con la MISMA conexión (sin pool.acquire() anidado que podía causar deadlock).
         async with self._pool.acquire() as conn:
-            if not suppressed:
-                existing = await conn.fetchrow(
-                    """
-                    SELECT id, notified
-                    FROM monitoring.alert
-                    WHERE region = $1
-                      AND dedup_key = $2
-                      AND resolved = FALSE
-                      AND suppressed = FALSE
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    alert.region,
-                    dedup_key,
-                )
-                if existing:
-                    alert_id = int(existing["id"])
-                    already_notified = bool(existing["notified"])
-                    await conn.execute(
+            async with conn.transaction():
+                if not suppressed:
+                    existing = await conn.fetchrow(
                         """
-                        UPDATE monitoring.alert
-                        SET occurrence_count = occurrence_count + 1,
-                            last_seen_at = NOW(),
-                            message = $2,
-                            exception_snippet = COALESCE($3, exception_snippet),
-                            event_type_source = COALESCE($4, event_type_source),
-                            root_cause_task_id = COALESCE($5, root_cause_task_id),
-                            id_report = COALESCE($6, id_report),
-                            updated_at = NOW()
-                        WHERE id = $1
+                        SELECT id, notified
+                        FROM monitoring.alert
+                        WHERE region = $1
+                          AND dedup_key = $2
+                          AND resolved = FALSE
+                          AND suppressed = FALSE
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        FOR UPDATE
                         """,
-                        alert_id,
-                        alert.message,
-                        alert.exception_snippet,
-                        alert.event_type_source,
-                        alert.root_cause_task_id,
-                        alert.id_report,
+                        alert.region,
+                        dedup_key,
                     )
-                    # Re-queue if alert was never notified (e.g. created before notifier was configured)
-                    return alert_id, not already_notified
+                    if existing:
+                        alert_id = int(existing["id"])
+                        already_notified = bool(existing["notified"])
+                        await conn.execute(
+                            """
+                            UPDATE monitoring.alert
+                            SET occurrence_count = occurrence_count + 1,
+                                last_seen_at = NOW(),
+                                message = $2,
+                                exception_snippet = COALESCE($3, exception_snippet),
+                                event_type_source = COALESCE($4, event_type_source),
+                                root_cause_task_id = COALESCE($5, root_cause_task_id),
+                                id_report = COALESCE($6, id_report),
+                                updated_at = NOW()
+                            WHERE id = $1
+                            """,
+                            alert_id,
+                            alert.message,
+                            alert.exception_snippet,
+                            alert.event_type_source,
+                            alert.root_cause_task_id,
+                            alert.id_report,
+                        )
+                        # Re-queue if alert was never notified (e.g. created before notifier was configured)
+                        return alert_id, not already_notified
 
-            alert_id = await self.insert_alert(alert, suppressed=suppressed, suppression_reason=suppression_reason)
-            return alert_id, True
+                alert_id = await self._insert_alert(conn, alert, suppressed=suppressed, suppression_reason=suppression_reason)
+                return alert_id, True
 
     async def get_avg_duration(self, dag_id: str, region: str) -> float | None:
         async with self._pool.acquire() as conn:
@@ -245,31 +260,6 @@ class PostgresMonitoringRepository(IMonitoringRepository):
                 region,
             )
             return dict(row) if row else None
-
-    async def has_report_evidence(self, dag_id: str, run_id: str | None, grace_started_at: datetime) -> bool:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM monitoring.dag_catalog dc
-                    LEFT JOIN public.file f ON f.id_file = dc.id_file
-                    LEFT JOIN public.report r ON r.id_file = dc.id_file
-                    WHERE dc.dag_id = $1
-                      AND (
-                          (dc.dag_type = 'D'
-                           AND f.updated_to IS NOT NULL
-                           AND f.updated_to::date >= CURRENT_DATE - INTERVAL '2 days')
-                          OR
-                          (dc.dag_type = 'C'
-                           AND r.converted_to IS NOT NULL
-                           AND r.converted_to >= CURRENT_DATE - INTERVAL '2 days')
-                      )
-                ) AS has_evidence
-                """,
-                dag_id,
-            )
-            return bool(row[0]) if row else False
 
     async def update_catalog_from_sync(self, event) -> None:
         async with self._pool.acquire() as conn:
@@ -310,11 +300,15 @@ class PostgresMonitoringRepository(IMonitoringRepository):
                 channel,
             )
 
-    async def get_primary_report_link(self, dag_id: str, region: str) -> dict[str, object] | None:
+    async def _get_report_link(self, dag_id: str, region: str) -> dict[str, object] | None:
+        """Devuelve el dag_report_link primario (id_report, id_file, ventana de
+        publicación y pesos de prioridad). Fuente única para get_primary_report_link
+        y get_publication_window."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id_report, id_file,
+                       expected_publication_window,
                        report_priority_weight, source_priority_weight, frequency_priority_weight
                 FROM monitoring.dag_report_link
                 WHERE dag_id = $1 AND region = $2
@@ -324,7 +318,16 @@ class PostgresMonitoringRepository(IMonitoringRepository):
                 dag_id,
                 region,
             )
-            return dict(row) if row else None
+            if not row:
+                return None
+            result = dict(row)
+            raw = result.get("expected_publication_window")
+            if isinstance(raw, str):
+                result["expected_publication_window"] = json.loads(raw)
+            return result
+
+    async def get_primary_report_link(self, dag_id: str, region: str) -> dict[str, object] | None:
+        return await self._get_report_link(dag_id, region)
 
     async def get_root_cause_task_id(self, dag_id: str, region: str, run_id: str) -> str | None:
         async with self._pool.acquire() as conn:
@@ -346,136 +349,8 @@ class PostgresMonitoringRepository(IMonitoringRepository):
             )
             return str(row[0]) if row and row[0] is not None else None
 
-    async def upsert_report_run_expectation(
-        self,
-        dag_id: str,
-        region: str,
-        run_id: str,
-        expected_reports_count: int,
-        generated_reports_count: int,
-        evaluation_status: str,
-        evaluated_at: datetime | None,
-    ) -> dict[str, object]:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO monitoring.report_run_expectation (
-                    dag_id, region, run_id,
-                    expected_reports_count, generated_reports_count,
-                    evaluation_status, evaluated_at, created_at
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
-                ON CONFLICT (dag_id, run_id, region) DO UPDATE SET
-                    expected_reports_count = EXCLUDED.expected_reports_count,
-                    generated_reports_count = EXCLUDED.generated_reports_count,
-                    evaluation_status = EXCLUDED.evaluation_status,
-                    evaluated_at = EXCLUDED.evaluated_at
-                RETURNING expected_reports_count, generated_reports_count,
-                          missing_reports_count, evaluation_status
-                """,
-                dag_id,
-                region,
-                run_id,
-                expected_reports_count,
-                generated_reports_count,
-                evaluation_status,
-                evaluated_at,
-            )
-            return dict(row) if row else {
-                "expected_reports_count": expected_reports_count,
-                "generated_reports_count": generated_reports_count,
-                "missing_reports_count": max(expected_reports_count - generated_reports_count, 0),
-                "evaluation_status": evaluation_status,
-            }
-
-    async def insert_report_incidence(
-        self,
-        region: str,
-        dag_id: str,
-        run_id: str | None,
-        id_report: int,
-        id_file: int | None,
-        category: str,
-        severity: str,
-        priority_score: float,
-        description: str,
-    ) -> int:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO monitoring.report_incidence (
-                    region, dag_id, run_id,
-                    id_report, id_file,
-                    category, severity, priority_score,
-                    status, detected_at, updated_at,
-                    description
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',NOW(),NOW(),$9)
-                RETURNING id
-                """,
-                region,
-                dag_id,
-                run_id,
-                id_report,
-                id_file,
-                category,
-                severity,
-                priority_score,
-                description,
-            )
-            return int(row[0]) if row else 0
-
     async def get_publication_window(self, dag_id: str, region: str) -> dict[str, object] | None:
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT id_report, id_file,
-                       expected_publication_window,
-                       report_priority_weight, source_priority_weight, frequency_priority_weight
-                FROM monitoring.dag_report_link
-                WHERE dag_id = $1 AND region = $2
-                ORDER BY is_primary DESC, created_at DESC
-                LIMIT 1
-                """,
-                dag_id,
-                region,
-            )
-            if not row:
-                return None
-            result = dict(row)
-            if result.get("expected_publication_window"):
-                import json as _json
-                raw = result["expected_publication_window"]
-                if isinstance(raw, str):
-                    result["expected_publication_window"] = _json.loads(raw)
-            return result
-
-    async def count_reports_for_dag(self, dag_id: str, region: str, execution_date: datetime | None = None) -> int:
-        async with self._pool.acquire() as conn:
-            if execution_date is not None:
-                row = await conn.fetchrow(
-                    """
-                    SELECT COUNT(r.*)::int
-                    FROM public.report r
-                    INNER JOIN monitoring.dag_catalog dc ON dc.id_file = r.id_file
-                    WHERE dc.dag_id = $1 AND dc.region = $2
-                      AND dc.id_file IS NOT NULL
-                      AND r.converted_to >= $3::date
-                    """,
-                    dag_id,
-                    region,
-                    execution_date,
-                )
-            else:
-                row = await conn.fetchrow(
-                    """
-                    SELECT COUNT(r.*)::int
-                    FROM public.report r
-                    INNER JOIN monitoring.dag_catalog dc ON dc.id_file = r.id_file
-                    WHERE dc.dag_id = $1 AND dc.region = $2 AND dc.id_file IS NOT NULL
-                    """,
-                    dag_id,
-                    region,
-                )
-            return int(row[0]) if row and row[0] is not None else 0
+        return await self._get_report_link(dag_id, region)
 
     async def upsert_unknown_dag(self, dag_id: str, region: str) -> None:
         async with self._pool.acquire() as conn:
@@ -497,12 +372,11 @@ class PostgresMonitoringRepository(IMonitoringRepository):
             await conn.execute(
                 """
                 UPDATE monitoring.dag_run_monitor drm
-                SET total_tasks       = cnt.total,
-                    success_tasks     = cnt.success,
-                    failed_tasks      = cnt.failed,
-                    skipped_tasks     = cnt.skipped,
-                    reports_generated = rre.generated_reports_count,
-                    updated_at        = NOW()
+                SET total_tasks   = cnt.total,
+                    success_tasks = cnt.success,
+                    failed_tasks  = cnt.failed,
+                    skipped_tasks = cnt.skipped,
+                    updated_at    = NOW()
                 FROM (
                     SELECT
                         COUNT(*)                                                      AS total,
@@ -512,12 +386,6 @@ class PostgresMonitoringRepository(IMonitoringRepository):
                     FROM monitoring.task_instance
                     WHERE dag_id = $1 AND run_id = $2 AND region = $3
                 ) cnt
-                LEFT JOIN LATERAL (
-                    SELECT generated_reports_count
-                    FROM monitoring.report_run_expectation
-                    WHERE dag_id = $1 AND run_id = $2 AND region = $3
-                    LIMIT 1
-                ) rre ON true
                 WHERE drm.dag_id = $1 AND drm.run_id = $2 AND drm.region = $3
                 """,
                 dag_id, run_id, region,
@@ -558,11 +426,12 @@ class PostgresMonitoringRepository(IMonitoringRepository):
             result = await conn.execute(
                 """
                 UPDATE monitoring.alert
-                SET resolved        = TRUE,
-                    resolved_at     = NOW(),
-                    resolved_reason = $3,
-                    auto_resolved   = TRUE,
-                    updated_at      = NOW()
+                SET resolved           = TRUE,
+                    resolved_at        = NOW(),
+                    resolved_reason    = $3,
+                    auto_resolved      = TRUE,
+                    resolution_seconds = GREATEST(EXTRACT(EPOCH FROM (NOW() - first_seen_at))::int, 0),
+                    updated_at         = NOW()
                 WHERE dag_id    = $1
                   AND region    = $2
                   AND resolved  = FALSE

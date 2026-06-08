@@ -16,7 +16,6 @@ class ViewScheduler:
         "current_status": 15,
         "performance_stats": 300,
         "broken_url": 600,
-        "incidence_timeline": 300,
         "broken_url_priority": 600,
         "stale_run_check": 600,
     }
@@ -27,7 +26,6 @@ class ViewScheduler:
         refresh_current_status_seconds: int = INTERVALS["current_status"],
         refresh_performance_seconds: int = INTERVALS["performance_stats"],
         refresh_broken_url_seconds: int = INTERVALS["broken_url"],
-        refresh_incidence_timeline_seconds: int = INTERVALS["incidence_timeline"],
         refresh_broken_url_priority_seconds: int = INTERVALS["broken_url_priority"],
         stale_run_checker: Callable[[], Awaitable[None]] | None = None,
         stale_run_check_seconds: int = INTERVALS["stale_run_check"],
@@ -38,7 +36,6 @@ class ViewScheduler:
             "current_status": refresh_current_status_seconds,
             "performance_stats": refresh_performance_seconds,
             "broken_url": refresh_broken_url_seconds,
-            "incidence_timeline": refresh_incidence_timeline_seconds,
             "broken_url_priority": refresh_broken_url_priority_seconds,
             "stale_run_check": stale_run_check_seconds,
         }
@@ -62,7 +59,6 @@ class ViewScheduler:
                 await self._maybe_refresh("current_status", self._refresher.refresh_current_status, now)
                 await self._maybe_refresh("performance_stats", self._refresher.refresh_performance_stats, now)
                 await self._maybe_refresh("broken_url", self._refresher.refresh_broken_url_summary, now)
-                await self._maybe_refresh("incidence_timeline", self._refresher.refresh_incidence_timeline, now)
                 await self._maybe_refresh("broken_url_priority", self._refresher.refresh_broken_url_priority, now)
                 if self._stale_checker:
                     await self._maybe_refresh("stale_run_check", self._stale_checker, now)

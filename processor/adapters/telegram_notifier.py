@@ -78,34 +78,6 @@ class TelegramNotifier(IAlertNotifier):
         ]
         return await self._post("\n".join(lines))
 
-    async def notify_status_change(
-        self,
-        alert_id: int,
-        action: str,
-        dag_id: str,
-        title: str,
-        actor: str | None = None,
-        suppression_reason: str | None = None,
-    ) -> bool:
-        """Notify when a dashboard action is taken: resolved, acknowledged, suppressed."""
-        icons = {"resolved": "✅", "acknowledged": "👁", "suppressed": "🔕"}
-        labels = {"resolved": "RESUELTA", "acknowledged": "RECONOCIDA", "suppressed": "SUPRIMIDA"}
-        icon = icons.get(action, "ℹ️")
-        label = labels.get(action, action.upper())
-
-        lines = [
-            f"{icon} <b>Alerta {label}</b>",
-            f"DAG: <code>{_h(dag_id)}</code>",
-            f"<i>{_h(title)}</i>",
-        ]
-        if actor:
-            lines.append(f"Por: <code>{_h(actor)}</code>")
-        if suppression_reason:
-            lines.append(f"Razón: <code>{_h(suppression_reason)}</code>")
-        lines.append(f"ID: #{alert_id}")
-
-        return await self._post("\n".join(lines))
-
     async def _post(self, text: str) -> bool:
         try:
             url = self._BASE_URL.format(token=self._token)

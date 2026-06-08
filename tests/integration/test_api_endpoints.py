@@ -290,7 +290,6 @@ class FakeFactory:
             "discarded_events": 0,
             "alerts_created": 1,
             "alerts_deduplicated": 1,
-            "alerts_suppressed": 0,
         }
         self.event_processor._alert_queue = type("QueueLike", (), {"qsize": lambda self: 0})()
         self.event_processor._consumer = type("ConsumerLike", (), {"get_metrics": lambda self: {"consumed_events": 3, "parse_errors": 0}})()
@@ -359,58 +358,32 @@ def test_dags_endpoints_return_rows(monkeypatch) -> None:
         assert detail_response.json() == [{"dag_id": "dag_1", "run_id": "run_1", "state": "success", "region": "BO"}]
 
 
-def test_alerts_endpoints_update_records(monkeypatch) -> None:
+def test_alerts_list_endpoint_is_read_only(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
         list_response = client.get("/alerts", params={"resolved": False, "severity": "warning", "dag_id": "dag_1"})
         assert list_response.status_code == 200
         assert list_response.json() == [{"id": 1, "dag_id": "dag_1", "severity": "warning", "resolved": False}]
 
-        resolve_response = client.patch("/alerts/1/resolve")
-        assert resolve_response.status_code == 200
-        assert resolve_response.json() == {"status": "ok", "alert_id": 1, "resolved": True}
-
-        acknowledge_response = client.patch("/alerts/2/acknowledge", json={"acknowledged_by": "tech-01"})
-        assert acknowledge_response.status_code == 200
-        assert acknowledge_response.json() == {"status": "ok", "alert_id": 2, "acknowledged": True}
-
-        suppress_response = client.patch(
-            "/alerts/2/suppress",
-            json={"suppressed": True, "suppression_reason": "maintenance"},
-        )
-        assert suppress_response.status_code == 200
-        assert suppress_response.json() == {
-            "status": "ok",
-            "alert_id": 2,
-            "suppressed": True,
-            "suppression_reason": "maintenance",
-        }
-
-        executed_queries = [
-            query
-            for connection in client.app.state.factory.db_pool.acquired
-            for query, _ in connection.executed
-        ]
-        assert any("UPDATE monitoring.alert SET acknowledged = TRUE" in query for query in executed_queries)
-        assert any("resolved = TRUE" in query and "updated_at = NOW()" in query for query in executed_queries)
-        assert any("acknowledged = TRUE" in query and "updated_at = NOW()" in query for query in executed_queries)
-        assert any("suppressed = $2" in query and "updated_at = NOW()" in query for query in executed_queries)
+        # Las acciones manuales (resolve/acknowledge/suppress/bulk-resolve) fueron eliminadas:
+        # las alertas se auto-resuelven. Esos PATCH ya no existen.
+        assert client.patch("/alerts/1/resolve").status_code == 404
+        assert client.patch("/alerts/2/acknowledge", json={"acknowledged_by": "tech-01"}).status_code == 404
+        assert client.patch("/alerts/2/suppress", json={"suppressed": True}).status_code == 404
+        assert client.patch("/alerts/bulk-resolve", json={"dag_id": "dag_1"}).status_code == 404
 
 
-def test_kpis_endpoint_returns_summary(monkeypatch) -> None:
+def test_alerts_list_rejects_invalid_pagination(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
-        response = client.get("/kpis")
+        # limit=-1 antes producía un error 500 de PostgreSQL; ahora se acota.
+        response = client.get("/alerts", params={"limit": -1, "offset": -5})
         assert response.status_code == 200
-        assert response.json()[0]["region"] == "BO"
 
 
-def test_incidences_endpoint_returns_prioritized_rows(monkeypatch) -> None:
+def test_kpis_today_endpoint_returns_summary(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
-        response = client.get("/incidences", params={"region": "BO", "status": "open"})
+        response = client.get("/kpis/today", params={"region": "BO"})
         assert response.status_code == 200
-        payload = response.json()
-        assert len(payload) == 2
-        assert payload[0]["priority_score"] == 95.0
-        assert payload[1]["priority_score"] == 70.0
+        assert response.json()["region"] == "BO"
 
 
 def test_dag_run_root_cause_endpoint_resolves_failed_task(monkeypatch) -> None:
@@ -424,20 +397,6 @@ def test_dag_run_root_cause_endpoint_resolves_failed_task(monkeypatch) -> None:
         assert len(payload["tasks"]) == 2
 
 
-def test_update_incidence_status_endpoint(monkeypatch) -> None:
-    with _build_client(monkeypatch) as client:
-        response = client.patch(
-            "/incidences/1/status",
-            json={"status": "in_progress", "observations": "assigned"},
-        )
-        assert response.status_code == 200
-        assert response.json() == {"status": "ok", "incidence_id": 1, "new_status": "in_progress"}
-
-        invalid = client.patch("/incidences/1/status", json={"status": "invalid"})
-        assert invalid.status_code == 200
-        assert invalid.json()["status"] == "error"
-
-
 def test_kpis_extended_endpoint(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
         response = client.get("/kpis/extended", params={"region": "BO"})
@@ -445,26 +404,30 @@ def test_kpis_extended_endpoint(monkeypatch) -> None:
         payload = response.json()
         assert payload["region"] == "BO"
         assert payload["daily"]["failure_rate_pct"] == 25.0
-        assert payload["reporting"]["missing_reports_today"] == 1
+        # El bloque "reporting" (dependía de report_run_expectation/public) fue eliminado.
+        assert "reporting" not in payload
         assert payload["urls"]["dead_urls_30d"] == 2
 
 
-def test_incidences_timeline_endpoint(monkeypatch) -> None:
+def test_incidences_endpoints_are_gone(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
-        response = client.get("/incidences/timeline", params={"region": "BO", "granularity": "day"})
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["granularity"] == "day"
-        assert len(payload["rows"]) == 1
+        assert client.get("/incidences", params={"region": "BO"}).status_code == 404
+        assert client.get("/incidences/timeline", params={"region": "BO"}).status_code == 404
+        assert client.patch("/incidences/1/status", json={"status": "resolved"}).status_code == 404
 
 
-def test_urls_prioritized_and_excel_export(monkeypatch) -> None:
+def test_reports_endpoint_is_gone(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
-        list_response = client.get("/urls/prioritized")
+        assert client.get("/reports", params={"region": "BO"}).status_code == 404
+
+
+def test_urls_by_task_and_excel_export(monkeypatch) -> None:
+    with _build_client(monkeypatch) as client:
+        list_response = client.get("/urls/by-task", params={"region": "BO"})
         assert list_response.status_code == 200
-        assert list_response.json()[0]["priority_score"] == 95.0
+        assert isinstance(list_response.json(), list)
 
-        export_response = client.get("/urls/prioritized/export.xlsx")
+        export_response = client.get("/urls/by-task/export.xlsx", params={"region": "BO"})
         assert export_response.status_code == 200
         assert export_response.headers["content-type"].startswith(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

@@ -22,26 +22,6 @@ async def get_kpis_extended(request: Request, region: str = Query("BO")):
             region,
         )
 
-        missing_reports_today = await conn.fetchval(
-            """
-            SELECT COUNT(*)
-            FROM monitoring.report_run_expectation
-            WHERE region = $1
-              AND created_at >= CURRENT_DATE
-              AND missing_reports_count > 0
-            """,
-            region,
-        )
-        total_expectations_today = await conn.fetchval(
-            """
-            SELECT COUNT(*)
-            FROM monitoring.report_run_expectation
-            WHERE region = $1
-              AND created_at >= CURRENT_DATE
-            """,
-            region,
-        )
-
         total_runs_week = await conn.fetchval(
             """
             SELECT COUNT(*)
@@ -61,15 +41,8 @@ async def get_kpis_extended(request: Request, region: str = Query("BO")):
         )
 
     base_dict = dict(base) if base else {}
-    missing_reports_today = int(missing_reports_today or 0)
-    total_expectations_today = int(total_expectations_today or 0)
     total_runs_week = int(total_runs_week or 0)
     dead_urls_30d = int(dead_urls_30d or 0)
-
-    missing_reports_index = round(
-        (missing_reports_today * 100.0 / total_expectations_today) if total_expectations_today else 0.0,
-        2,
-    )
 
     return {
         "region": region,
@@ -86,13 +59,6 @@ async def get_kpis_extended(request: Request, region: str = Query("BO")):
         "alerts": {
             "open": int(base_dict.get("open_alerts", 0) or 0),
             "open_critical": int(base_dict.get("open_critical_alerts", 0) or 0),
-        },
-        "reporting": {
-            "runs_with_no_reports_today": int(base_dict.get("runs_with_no_reports_today", 0) or 0),
-            "missing_reports_today": missing_reports_today,
-            "missing_reports_count": missing_reports_today,
-            "total_reports_expected": total_expectations_today,
-            "missing_reports_index_pct": missing_reports_index,
         },
         "urls": {
             "dead_urls_30d": dead_urls_30d,

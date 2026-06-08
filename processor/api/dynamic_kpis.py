@@ -79,29 +79,6 @@ async def get_dynamic_kpis(
             region, date_from, date_to,
         )
 
-        # ── Expectativas de reportes en el rango ─────────────────────────────
-        missing_reports = await conn.fetchval(
-            """
-            SELECT COUNT(*)
-            FROM monitoring.report_run_expectation
-            WHERE region = $1
-              AND created_at::date >= $2
-              AND created_at::date <= $3
-              AND missing_reports_count > 0
-            """,
-            region, date_from, date_to,
-        )
-        total_expectations = await conn.fetchval(
-            """
-            SELECT COUNT(*)
-            FROM monitoring.report_run_expectation
-            WHERE region = $1
-              AND created_at::date >= $2
-              AND created_at::date <= $3
-            """,
-            region, date_from, date_to,
-        )
-
         # ── URLs muertas en el rango ──────────────────────────────────────────
         dead_urls = await conn.fetchval(
             """
@@ -115,10 +92,6 @@ async def get_dynamic_kpis(
 
     runs = dict(runs_row) if runs_row else {}
     alerts = dict(alerts_row) if alerts_row else {}
-    total_exp = int(total_expectations or 0)
-    missing = int(missing_reports or 0)
-
-    missing_index = round((missing * 100.0 / total_exp) if total_exp else 0.0, 2)
 
     return {
         "region": region,
@@ -136,11 +109,6 @@ async def get_dynamic_kpis(
             "open": int(alerts.get("open_alerts") or 0),
             "open_critical": int(alerts.get("open_critical") or 0),
             "created_in_period": int(alerts_created or 0),
-        },
-        "reporting": {
-            "missing_reports_count": missing,
-            "total_reports_expected": total_exp,
-            "missing_reports_index_pct": missing_index,
         },
         "urls": {
             "dead_urls_in_period": int(dead_urls or 0),

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 
 from ..domain.models import AlertToSend, ProcessedEvent
 
@@ -48,10 +47,6 @@ class IMonitoringRepository(ABC):
         ...
 
     @abstractmethod
-    async def has_report_evidence(self, dag_id: str, run_id: str | None, grace_started_at: datetime) -> bool:
-        ...
-
-    @abstractmethod
     async def update_catalog_from_sync(self, event) -> None:
         ...
 
@@ -68,43 +63,11 @@ class IMonitoringRepository(ABC):
         ...
 
     @abstractmethod
-    async def upsert_report_run_expectation(
-        self,
-        dag_id: str,
-        region: str,
-        run_id: str,
-        expected_reports_count: int,
-        generated_reports_count: int,
-        evaluation_status: str,
-        evaluated_at: datetime | None,
-    ) -> dict[str, object]:
-        ...
-
-    @abstractmethod
-    async def insert_report_incidence(
-        self,
-        region: str,
-        dag_id: str,
-        run_id: str | None,
-        id_report: int,
-        id_file: int | None,
-        category: str,
-        severity: str,
-        priority_score: float,
-        description: str,
-    ) -> int:
-        ...
-
-    @abstractmethod
     async def upsert_unknown_dag(self, dag_id: str, region: str) -> None:
         ...
 
     @abstractmethod
     async def get_publication_window(self, dag_id: str, region: str) -> dict[str, object] | None:
-        ...
-
-    @abstractmethod
-    async def count_reports_for_dag(self, dag_id: str, region: str, execution_date: datetime | None = None) -> int:
         ...
 
     @abstractmethod

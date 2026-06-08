@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from datetime import datetime, timezone
 
 import asyncpg
 from dotenv import load_dotenv
@@ -26,7 +25,6 @@ async def main() -> int:
     test_id = uuid.uuid4().hex[:12]
     dedup_key = f"smoke:{test_id}:dedup"
     run_id = f"smoke-run-{test_id}"
-    description = f"smoke incidence {test_id}"
 
     alert_id_1 = None
     alert_id_2 = None
@@ -50,6 +48,7 @@ async def main() -> int:
             channels=["slack"],
         )
 
+        # ── Deduplicación (occurrence_count) ──────────────────────────────────
         alert_id_1, created_1 = await repo.upsert_alert_occurrence(alert, suppressed=False, suppression_reason=None)
         alert_id_2, created_2 = await repo.upsert_alert_occurrence(alert, suppressed=False, suppression_reason=None)
 
@@ -75,6 +74,7 @@ async def main() -> int:
         assert alert_id_1 == alert_id_2
         assert int(row["occurrence_count"]) == 2
 
+        # ── Notificación (compatibilidad notified_channel + channel) ──────────
         await repo.mark_alert_notified(alert_id_1, "slack")
 
         async with pool.acquire() as conn:
@@ -93,66 +93,32 @@ async def main() -> int:
         assert notify_row["channel"] == "slack"
         print("NOTIFY compatibility OK: notified_channel + channel")
 
-        expectation = await repo.upsert_report_run_expectation(
-            dag_id="system",
-            region="global",
-            run_id=run_id,
-            expected_reports_count=2,
-            generated_reports_count=0,
-            evaluation_status="failed",
-            evaluated_at=datetime.now(timezone.utc),
-        )
-        print(f"EXPECTATION => {expectation}")
-        assert int(expectation["missing_reports_count"]) == 2
-
-        incidence_id = await repo.insert_report_incidence(
-            region="global",
-            dag_id="system",
-            run_id=run_id,
-            id_report=999999,
-            id_file=None,
-            category="report_not_generated",
-            severity="critical",
-            priority_score=100.0,
-            description=description,
-        )
-        print(f"INCIDENCE inserted id={incidence_id}")
+        # ── Auto-resolución (reemplaza la gestión manual ack/suppress/resolve) ─
+        #    Debe marcar resolved + auto_resolved y poblar resolution_seconds (MTTR).
+        resolved_count = await repo.auto_resolve_dag_alerts("system", "global", f"smoke_auto_resolve:{test_id}")
+        print(f"AUTO_RESOLVE resolved_count={resolved_count}")
+        assert resolved_count >= 1
 
         async with pool.acquire() as conn:
-            ts_before = await conn.fetchval("SELECT updated_at FROM monitoring.alert WHERE id = $1", alert_id_1)
-            await conn.execute(
-                "UPDATE monitoring.alert SET acknowledged = TRUE, acknowledged_at = NOW(), updated_at = NOW() WHERE id = $1",
+            resolved_row = await conn.fetchrow(
+                """
+                SELECT resolved, auto_resolved, resolved_reason, resolution_seconds
+                FROM monitoring.alert
+                WHERE id = $1
+                """,
                 alert_id_1,
             )
-            ts_after_ack = await conn.fetchval("SELECT updated_at FROM monitoring.alert WHERE id = $1", alert_id_1)
 
-            await conn.execute(
-                "UPDATE monitoring.alert SET suppressed = TRUE, suppression_reason = 'smoke', updated_at = NOW() WHERE id = $1",
-                alert_id_1,
-            )
-            ts_after_suppress = await conn.fetchval("SELECT updated_at FROM monitoring.alert WHERE id = $1", alert_id_1)
-
-            await conn.execute(
-                "UPDATE monitoring.alert SET resolved = TRUE, resolved_at = NOW(), updated_at = NOW() WHERE id = $1",
-                alert_id_1,
-            )
-            ts_after_resolve = await conn.fetchval("SELECT updated_at FROM monitoring.alert WHERE id = $1", alert_id_1)
-
-        assert ts_before is not None
-        assert ts_after_ack is not None
-        assert ts_after_suppress is not None
-        assert ts_after_resolve is not None
-        assert ts_after_ack >= ts_before
-        assert ts_after_suppress >= ts_after_ack
-        assert ts_after_resolve >= ts_after_suppress
-        print("UPDATED_AT lifecycle OK: acknowledge -> suppress -> resolve")
+        assert resolved_row is not None
+        assert bool(resolved_row["resolved"]) is True
+        assert bool(resolved_row["auto_resolved"]) is True
+        assert resolved_row["resolution_seconds"] is not None
+        print("AUTO_RESOLVE OK: resolved + auto_resolved + resolution_seconds (MTTR)")
 
         print("SMOKE TEST SPRINT2: SUCCESS")
         return 0
     finally:
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM monitoring.report_incidence WHERE description = $1", description)
-            await conn.execute("DELETE FROM monitoring.report_run_expectation WHERE dag_id = 'system' AND region = 'global' AND run_id = $1", run_id)
             if alert_id_1 is not None:
                 await conn.execute("DELETE FROM monitoring.alert WHERE id = $1", alert_id_1)
             else:

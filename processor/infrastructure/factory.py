@@ -86,7 +86,6 @@ class BackendFactory:
             calculator,
             evaluator,
             alert_queue,
-            alert_grace_seconds=config.alert_grace_seconds,
         )
         factory.alert_dispatcher = AlertDispatcher(factory._notifier, repository, alert_queue)
         factory.view_scheduler = ViewScheduler(
@@ -94,7 +93,6 @@ class BackendFactory:
             refresh_current_status_seconds=config.refresh_current_status_seconds,
             refresh_performance_seconds=config.refresh_performance_seconds,
             refresh_broken_url_seconds=config.refresh_broken_url_seconds,
-            refresh_incidence_timeline_seconds=config.refresh_incidence_timeline_seconds,
             refresh_broken_url_priority_seconds=config.refresh_broken_url_priority_seconds,
             stale_run_checker=repository.resolve_stale_running_runs,
         )

@@ -22,11 +22,9 @@ async def main() -> int:
             await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.dag_performance_stats")
             await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.broken_url_summary")
             await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.broken_url_priority")
-            await conn.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY monitoring.incidence_timeline")
 
             await conn.fetch("SELECT * FROM monitoring.kpi_summary LIMIT 5")
             await conn.fetch("SELECT * FROM monitoring.broken_url_priority LIMIT 5")
-            await conn.fetch("SELECT * FROM monitoring.incidence_timeline LIMIT 5")
 
         api_base = os.getenv("API_BASE_URL", "http://localhost:8000")
         async with httpx.AsyncClient(timeout=10) as client:

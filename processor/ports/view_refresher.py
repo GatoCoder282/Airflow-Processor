@@ -17,9 +17,5 @@ class IViewRefresher(ABC):
         ...
 
     @abstractmethod
-    async def refresh_incidence_timeline(self) -> None:
-        ...
-
-    @abstractmethod
     async def refresh_broken_url_priority(self) -> None:
         ...

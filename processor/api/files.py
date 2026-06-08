@@ -4,6 +4,8 @@ from datetime import date
 
 from fastapi import APIRouter, Query, Request
 
+from ._pagination import clamp_pagination
+
 router = APIRouter(prefix="/files", tags=["files"])
 
 
@@ -23,6 +25,7 @@ async def list_files(
     Lista el estado de descarga de DAGs tipo D.
     El outcome se determina por la task de notificación con state=success en el último run.
     """
+    limit, offset = clamp_pagination(limit, offset)
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
         query = """
