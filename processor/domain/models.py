@@ -144,7 +144,6 @@ class AlertToSend(BaseModel):
     active_task_state: str | None = None
     start_date: datetime | None = None
     source_tag: str | None = None
-    cube_tag: str | None = None
 
 
 __all__ = [

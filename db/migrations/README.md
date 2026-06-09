@@ -19,6 +19,7 @@ psql "$DATABASE_URL" -f db/migrations/2026-06-05_001_remove_incidences_public_sc
 | Script | Qué hace |
 |--------|----------|
 | `2026-06-05_001_remove_incidences_public_schema.sql` | Elimina `incidence_timeline` (mat. view) y `report_incidence`. Incluye, comentada, una FASE 2 para `report_run_expectation` que requiere revisar/recrear antes la vista `kpi_summary`. |
+| `2026-06-08_002_dag_cube_many_to_many.sql` | Crea `monitoring.dag_cube` (relación muchos-a-muchos DAG→cubos) + índice + FK + backfill desde `dag_catalog.cube_tag`. |
 
 > **Nota:** el código del backend ya no lee ni escribe estos objetos, así que la
 > aplicación funciona aunque la migración aún no se haya corrido. Correrla solo

@@ -252,7 +252,7 @@ class PostgresMonitoringRepository(IMonitoringRepository):
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT criticality, sla_seconds, expected_reports_count, source_tag, cube_tag
+                SELECT criticality, sla_seconds, expected_reports_count, source_tag
                 FROM monitoring.dag_catalog
                 WHERE dag_id = $1 AND region = $2
                 """,

@@ -5,6 +5,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Query, Request
 
+from ._dag_tags import cubes_subquery
+
 router = APIRouter(tags=["kpis"])
 
 
@@ -104,6 +106,7 @@ async def get_kpis_today(
         )
 
         # ── Descargas exitosas: task update_file=success ─────────────────────────
+        cubes = cubes_subquery("dc")
         _order_by_criticality = """
             ORDER BY
                 CASE dc.criticality
@@ -125,7 +128,8 @@ async def get_kpis_today(
         """
         download_rows = await conn.fetch(
             f"""
-            SELECT drm.dag_id, drm.run_id, drm.duration_seconds, dc.criticality
+            SELECT drm.dag_id, drm.run_id, drm.duration_seconds, dc.criticality,
+                   dc.source_tag, {cubes}
             {_base_from}
               AND EXISTS (
                   SELECT 1 FROM monitoring.task_instance ti
@@ -143,7 +147,8 @@ async def get_kpis_today(
         # ── Revisiones de archivo: task notify_success_revision_only=success ──
         revision_rows = await conn.fetch(
             f"""
-            SELECT drm.dag_id, drm.run_id, drm.duration_seconds, dc.criticality
+            SELECT drm.dag_id, drm.run_id, drm.duration_seconds, dc.criticality,
+                   dc.source_tag, {cubes}
             {_base_from}
               AND EXISTS (
                   SELECT 1 FROM monitoring.task_instance ti
@@ -161,7 +166,8 @@ async def get_kpis_today(
         # ── Revisiones de contenido: task notify_success_download_revision=success ──
         download_revision_rows = await conn.fetch(
             f"""
-            SELECT drm.dag_id, drm.run_id, drm.duration_seconds, dc.criticality
+            SELECT drm.dag_id, drm.run_id, drm.duration_seconds, dc.criticality,
+                   dc.source_tag, {cubes}
             {_base_from}
               AND EXISTS (
                   SELECT 1 FROM monitoring.task_instance ti
@@ -178,13 +184,15 @@ async def get_kpis_today(
 
         # ── URLs rotas del día: task notify_url_broken=success ────────────────
         broken_rows = await conn.fetch(
-            """
-            SELECT dag_id, run_id, criticality
+            f"""
+            SELECT dag_id, run_id, criticality, source_tag, cubes
             FROM (
                 SELECT DISTINCT
                     drm.dag_id,
                     drm.run_id,
-                    dc.criticality
+                    dc.criticality,
+                    dc.source_tag,
+                    {cubes}
                 FROM monitoring.dag_run_monitor drm
                 JOIN monitoring.dag_catalog dc
                     ON  dc.dag_id  = drm.dag_id
@@ -226,20 +234,25 @@ async def get_kpis_today(
 
         # ── Top 15 de mayor duración ──────────────────────────────────────────
         top15_rows = await conn.fetch(
-            """
+            f"""
             SELECT
-                dag_id,
-                run_id,
-                run_type,
-                state,
-                start_date,
-                end_date,
-                duration_seconds
-            FROM monitoring.dag_run_monitor
-            WHERE region = $1
-              AND start_date::date  = $2
-              AND duration_seconds IS NOT NULL
-            ORDER BY duration_seconds DESC
+                drm.dag_id,
+                drm.run_id,
+                drm.run_type,
+                drm.state,
+                drm.start_date,
+                drm.end_date,
+                drm.duration_seconds,
+                dc.source_tag,
+                {cubes}
+            FROM monitoring.dag_run_monitor drm
+            LEFT JOIN monitoring.dag_catalog dc
+                ON  dc.dag_id = drm.dag_id
+                AND dc.region = drm.region
+            WHERE drm.region = $1
+              AND drm.start_date::date  = $2
+              AND drm.duration_seconds IS NOT NULL
+            ORDER BY drm.duration_seconds DESC
             LIMIT 15
             """,
             region, target_date,

@@ -8,7 +8,6 @@ class AlertEvaluator:
     def evaluate(self, event: RawEvent, semaphore: SemaphoreResult, catalog: dict[str, object] | None) -> AlertToSend | None:
         criticality = (catalog or {}).get("criticality", "medium")
         source_tag = (catalog or {}).get("source_tag")
-        cube_tag = (catalog or {}).get("cube_tag")
 
         if event.try_number and event.max_tries and event.try_number >= event.max_tries and event.task_state == "failed":
             return self._build_alert(
@@ -19,7 +18,6 @@ class AlertEvaluator:
                 title=f"{event.dag_id} - task {event.task_id} agoto reintentos",
                 channels=["telegram"],
                 source_tag=source_tag,
-                cube_tag=cube_tag,
             )
 
         if event.event_type == EventType.SCHEDULER_UNHEALTHY:
@@ -31,7 +29,6 @@ class AlertEvaluator:
                 title="Airflow scheduler CAIDO",
                 channels=["telegram"],
                 source_tag=source_tag,
-                cube_tag=cube_tag,
             )
 
         if event.event_type in {EventType.IMPORT_ERROR, EventType.IMPORT_ERROR_DETECTED}:
@@ -43,7 +40,6 @@ class AlertEvaluator:
                 title=f"{event.dag_id} - import error detectado",
                 channels=[],
                 source_tag=source_tag,
-                cube_tag=cube_tag,
             )
 
         if semaphore.color == SemaphoreColor.RED and event.task_state != "upstream_failed":
@@ -61,7 +57,6 @@ class AlertEvaluator:
                 title=f"{event.dag_id} - {semaphore.reason}",
                 channels=channels,
                 source_tag=source_tag,
-                cube_tag=cube_tag,
             )
 
         return None
@@ -75,7 +70,6 @@ class AlertEvaluator:
         title: str,
         channels: list[str],
         source_tag: str | None = None,
-        cube_tag: str | None = None,
     ) -> AlertToSend:
         snippet = event.detail[:500] if event.detail else None
         return AlertToSend(
@@ -93,5 +87,4 @@ class AlertEvaluator:
             channels=channels,
             start_date=event.start_date,
             source_tag=source_tag,
-            cube_tag=cube_tag,
         )

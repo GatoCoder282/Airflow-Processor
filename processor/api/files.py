@@ -4,6 +4,7 @@ from datetime import date
 
 from fastapi import APIRouter, Query, Request
 
+from ._dag_tags import cubes_subquery
 from ._pagination import clamp_pagination
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -26,13 +27,15 @@ async def list_files(
     El outcome se determina por la task de notificación con state=success en el último run.
     """
     limit, offset = clamp_pagination(limit, offset)
+    cubes = cubes_subquery("dc")
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
-        query = """
+        query = f"""
             SELECT
                 dc.dag_id,
                 dc.region,
                 dc.source_tag,
+                {cubes},
                 dc.criticality,
                 dc.dag_type,
                 dcs.last_semaphore,

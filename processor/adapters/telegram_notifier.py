@@ -63,8 +63,6 @@ class TelegramNotifier(IAlertNotifier):
             lines.append(f"📅 Fecha: <code>{_fmt_dt(alert.start_date)}</code>")
         if alert.source_tag:
             lines.append(f"🏭 Fuente: <code>{_h(alert.source_tag)}</code>")
-        if alert.cube_tag:
-            lines.append(f"📦 Cubo: <code>{_h(alert.cube_tag)}</code>")
         if alert.semaphore_reason:
             lines.append(f"💬 Semáforo: <code>{_h(alert.semaphore_reason)}</code>")
         if alert.active_task_id:

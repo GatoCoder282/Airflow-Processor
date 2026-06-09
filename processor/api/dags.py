@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 
+from ._dag_tags import cubes_subquery
 from ._pagination import clamp_pagination
 
 router = APIRouter(prefix="/dags", tags=["dags"])
@@ -22,7 +23,11 @@ async def list_dags(
     limit, offset = clamp_pagination(limit, offset)
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
-        query = "SELECT * FROM monitoring.dag_current_status WHERE region = $1 AND is_active = true"
+        query = (
+            f"SELECT dcs.*, {cubes_subquery('dcs')}"
+            " FROM monitoring.dag_current_status dcs"
+            " WHERE region = $1 AND is_active = true"
+        )
         params: list[object] = [region]
         if semaphore:
             query += f" AND last_semaphore = ${len(params) + 1}"
@@ -61,25 +66,28 @@ async def get_failed_dag_history(
     limit, offset = clamp_pagination(limit, offset)
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
-        conditions = ["region = $1", "failed_at >= NOW() - ($2 || ' days')::INTERVAL"]
+        conditions = ["h.region = $1", "h.failed_at >= NOW() - ($2 || ' days')::INTERVAL"]
         params: list[object] = [region, str(days)]
         if dag_id:
             params.append(dag_id)
-            conditions.append(f"dag_id = ${len(params)}")
+            conditions.append(f"h.dag_id = ${len(params)}")
         if dag_type:
             params.append(dag_type)
             conditions.append(
-                f"dag_id IN (SELECT dag_id FROM monitoring.dag_catalog"
+                f"h.dag_id IN (SELECT dag_id FROM monitoring.dag_catalog"
                 f" WHERE region = $1 AND dag_type = ${len(params)})"
             )
         if status:
             params.append(status)
-            conditions.append(f"failure_status = ${len(params)}")
+            conditions.append(f"h.failure_status = ${len(params)}")
         where = " AND ".join(conditions)
         params.extend([limit, offset])
         rows = await conn.fetch(
-            f"SELECT * FROM monitoring.dag_failure_history WHERE {where}"
-            f" ORDER BY failed_at DESC LIMIT ${len(params) - 1} OFFSET ${len(params)}",
+            f"SELECT h.*, dc.source_tag, {cubes_subquery('h')}"
+            f" FROM monitoring.dag_failure_history h"
+            f" LEFT JOIN monitoring.dag_catalog dc ON dc.dag_id = h.dag_id AND dc.region = h.region"
+            f" WHERE {where}"
+            f" ORDER BY h.failed_at DESC LIMIT ${len(params) - 1} OFFSET ${len(params)}",
             *params,
         )
         return [dict(r) for r in rows]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 
+from ._dag_tags import cubes_subquery
 from ._pagination import clamp_pagination
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -27,37 +28,39 @@ async def list_alerts(
     limit, offset = clamp_pagination(limit, offset)
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
-        query = """
-            SELECT id, region, dag_id, run_id, task_id,
-                   severity, alert_type, incident_category,
-                   title, message, exception_snippet,
-                   occurrence_count, suppressed, suppression_reason,
-                   resolved, resolved_at, auto_resolved, resolved_reason,
-                   resolution_seconds,
-                   first_seen_at, last_seen_at, created_at, updated_at
-            FROM monitoring.alert
+        query = f"""
+            SELECT a.id, a.region, a.dag_id, a.run_id, a.task_id,
+                   a.severity, a.alert_type, a.incident_category,
+                   a.title, a.message, a.exception_snippet,
+                   a.occurrence_count, a.suppressed, a.suppression_reason,
+                   a.resolved, a.resolved_at, a.auto_resolved, a.resolved_reason,
+                   a.resolution_seconds,
+                   a.first_seen_at, a.last_seen_at, a.created_at, a.updated_at,
+                   dc.source_tag, {cubes_subquery('a')}
+            FROM monitoring.alert a
+            LEFT JOIN monitoring.dag_catalog dc ON dc.dag_id = a.dag_id AND dc.region = a.region
             WHERE 1=1
         """
         params: list[object] = []
         if region:
-            query += f" AND region = ${len(params) + 1}"
+            query += f" AND a.region = ${len(params) + 1}"
             params.append(region)
         if resolved is not None:
-            query += f" AND resolved = ${len(params) + 1}"
+            query += f" AND a.resolved = ${len(params) + 1}"
             params.append(resolved)
         if severity:
-            query += f" AND severity = ${len(params) + 1}"
+            query += f" AND a.severity = ${len(params) + 1}"
             params.append(severity)
         if dag_id:
-            query += f" AND dag_id = ${len(params) + 1}"
+            query += f" AND a.dag_id = ${len(params) + 1}"
             params.append(dag_id)
         if alert_type:
-            query += f" AND alert_type = ${len(params) + 1}"
+            query += f" AND a.alert_type = ${len(params) + 1}"
             params.append(alert_type)
         if since_days is not None:
-            query += f" AND first_seen_at >= NOW() - (${len(params) + 1} || ' days')::INTERVAL"
+            query += f" AND a.first_seen_at >= NOW() - (${len(params) + 1} || ' days')::INTERVAL"
             params.append(str(max(int(since_days), 0)))
-        query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        query += f" ORDER BY a.created_at DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         params.extend([limit, offset])
         rows = await conn.fetch(query, *params)
         return [dict(row) for row in rows]

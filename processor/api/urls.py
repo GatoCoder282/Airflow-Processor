@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
+from ._dag_tags import cubes_subquery
 from ._pagination import clamp_pagination
 
 router = APIRouter(prefix="/urls", tags=["urls"])
@@ -31,15 +32,16 @@ async def list_urls_by_task(
         date_to = date.today()
 
     limit, offset = clamp_pagination(limit, offset)
+    cubes = cubes_subquery("ti")
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT
                 ti.dag_id,
                 dc.criticality,
                 dc.source_tag,
-                dc.cube_tag,
+                {cubes},
                 COUNT(DISTINCT ti.run_id)       AS detection_count,
                 MAX(drm.start_date)::date        AS last_detection_date,
                 MIN(drm.start_date)::date        AS first_detection_date
@@ -56,7 +58,7 @@ async def list_urls_by_task(
               AND ti.region  = $1
               AND ti.start_date::date >= $2
               AND ti.start_date::date <= $3
-            GROUP BY ti.dag_id, dc.criticality, dc.source_tag, dc.cube_tag
+            GROUP BY ti.dag_id, ti.region, dc.criticality, dc.source_tag
             ORDER BY
                 CASE dc.criticality
                     WHEN 'high'   THEN 1
@@ -88,15 +90,16 @@ async def export_urls_by_task_excel(
         date_to = date.today()
 
     limit, _ = clamp_pagination(limit, 0)
+    cubes = cubes_subquery("ti")
     pool = request.app.state.factory.db_pool
     async with pool.acquire() as conn:
         rows = [dict(r) for r in await conn.fetch(
-            """
+            f"""
             SELECT
                 ti.dag_id,
                 dc.criticality,
                 dc.source_tag,
-                dc.cube_tag,
+                {cubes},
                 COUNT(DISTINCT ti.run_id)       AS detection_count,
                 MAX(drm.start_date)::date        AS last_detection_date,
                 MIN(drm.start_date)::date        AS first_detection_date
@@ -113,7 +116,7 @@ async def export_urls_by_task_excel(
               AND ti.region  = $1
               AND ti.start_date::date >= $2
               AND ti.start_date::date <= $3
-            GROUP BY ti.dag_id, dc.criticality, dc.source_tag, dc.cube_tag
+            GROUP BY ti.dag_id, ti.region, dc.criticality, dc.source_tag
             ORDER BY
                 CASE dc.criticality
                     WHEN 'high'   THEN 1
@@ -131,7 +134,7 @@ async def export_urls_by_task_excel(
     sheet = workbook.active
     sheet.title = "urls_rotas_por_task"
 
-    headers = ["dag_id", "criticality", "source_tag", "cube_tag", "detection_count", "last_detection_date", "first_detection_date"]
+    headers = ["dag_id", "criticality", "source_tag", "cubes", "detection_count", "last_detection_date", "first_detection_date"]
     sheet.append(headers)
     for row in rows:
         sheet.append([str(row.get(h)) if row.get(h) is not None else None for h in headers])
