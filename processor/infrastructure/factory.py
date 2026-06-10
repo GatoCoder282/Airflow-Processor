@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import sys
 
@@ -9,6 +10,7 @@ import redis.asyncio as redis
 
 from ..adapters.composite_notifier import CompositeNotifier
 from ..adapters.null_notifier import NullNotifier
+from ..adapters.platform_db_reader import PlatformDbReader
 from ..adapters.postgres_monitoring_repo import PostgresMonitoringRepository
 from ..adapters.postgres_view_refresher import PostgresViewRefresher
 from ..adapters.redis_catalog_consumer import RedisCatalogSyncConsumer
@@ -25,11 +27,15 @@ from ..services.semaphore_calculator import SemaphoreCalculator
 from ..services.view_scheduler import ViewScheduler
 from .config import BackendConfig
 
+logger = logging.getLogger(__name__)
+
 
 class BackendFactory:
     def __init__(self, config: BackendConfig):
         self.config = config
         self.db_pool: asyncpg.Pool | None = None
+        self.platform_db_pool: asyncpg.Pool | None = None
+        self.platform: PlatformDbReader = PlatformDbReader(None)
         self.redis_client: redis.Redis | None = None
         self.event_processor: EventProcessor | None = None
         self.alert_dispatcher: AlertDispatcher | None = None
@@ -49,6 +55,22 @@ class BackendFactory:
             max_size=config.pg_pool_max,
             ssl=False,
         )
+
+        # Conexión opcional y tolerante a fallos a platform_db (otro servidor, solo lectura).
+        # min_size=0 ⇒ no se conecta al boot, así un server caído no impide arrancar el Processor.
+        if config.platform_db_dsn:
+            try:
+                factory.platform_db_pool = await asyncpg.create_pool(
+                    dsn=config.platform_db_dsn,
+                    min_size=0,
+                    max_size=config.pg_pool_max,
+                    ssl=False,
+                    server_settings={"default_transaction_read_only": "on"},
+                )
+            except Exception:
+                logger.warning("No se pudo crear el pool de platform_db; enriquecimiento deshabilitado", exc_info=True)
+        factory.platform = PlatformDbReader(factory.platform_db_pool)
+
         factory.redis_client = redis.Redis(
             host=config.redis_host,
             port=config.redis_port,
@@ -120,3 +142,5 @@ class BackendFactory:
             await self.redis_client.aclose()
         if self.db_pool is not None:
             await self.db_pool.close()
+        if self.platform_db_pool is not None:
+            await self.platform_db_pool.close()

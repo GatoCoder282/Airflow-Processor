@@ -8,6 +8,7 @@ from .dynamic_kpis import router as dynamic_kpis_router
 from .files import router as files_router
 from .health import router as health_router
 from .kpis import router as kpis_router
+from .reports import router as reports_router
 from .urls import router as urls_router
 
 router = APIRouter()
@@ -18,3 +19,4 @@ router.include_router(urls_router)
 router.include_router(alerts_router)
 router.include_router(kpis_router)
 router.include_router(dynamic_kpis_router)
+router.include_router(reports_router)

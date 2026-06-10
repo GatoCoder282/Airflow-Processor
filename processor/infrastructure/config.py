@@ -15,6 +15,9 @@ class BackendConfig(BaseSettings):
     pg_pool_min: int = 2
     pg_pool_max: int = 10
 
+    # Base operacional platform_db (solo lectura, opcional). Vacío = enriquecimiento deshabilitado.
+    platform_db_dsn: str = ""
+
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     taiga_url: str | None = None
@@ -51,6 +54,7 @@ class BackendConfig(BaseSettings):
             postgres_dsn=os.getenv("DATABASE_URL", "postgresql://datax_backend:change_me@localhost:5432/datax"),
             pg_pool_min=int(os.getenv("PG_POOL_MIN", "2")),
             pg_pool_max=int(os.getenv("PG_POOL_MAX", "10")),
+            platform_db_dsn=os.getenv("PLATFORM_DB_DSN", ""),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID") or None,
             taiga_url=os.getenv("TAIGA_URL") or None,

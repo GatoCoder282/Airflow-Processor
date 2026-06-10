@@ -72,7 +72,19 @@ async def list_urls_by_task(
             region, date_from, date_to, limit, offset,
         )
 
-    return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+
+    # Enriquecimiento aditivo desde platform_db (tolerante: {} si no disponible).
+    dag_ids = [r["dag_id"] for r in result if r.get("dag_id")]
+    enrichment = await request.app.state.factory.platform.broken_urls_for(dag_ids)
+    for row in result:
+        info = enrichment.get(row["dag_id"], {})
+        row["file_name"] = info.get("file_name")
+        row["path"] = info.get("path")
+        row["datos_a"] = info.get("datos_a")
+        row["main_url"] = info.get("main_url")
+        row["broken_url"] = info.get("broken_url")
+    return result
 
 
 @router.get("/by-task/export.xlsx")

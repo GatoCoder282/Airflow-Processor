@@ -173,6 +173,21 @@ class FakeWorker:
         self.ran = True
 
 
+class FakePlatformReader:
+    """Simula platform_db no disponible: enriquecimiento vacío (los endpoints no rompen)."""
+
+    available = False
+
+    async def file_enrichment(self) -> dict:
+        return {}
+
+    async def broken_urls_for(self, dag_ids) -> dict:
+        return {}
+
+    async def reports_by_dag(self, dag_id) -> list:
+        return []
+
+
 class FakeFactory:
     def __init__(self) -> None:
         self.config = type("Config", (), {"app_name": "ETL Observability Backend"})()
@@ -306,6 +321,7 @@ class FakeFactory:
             }
         }
         self.catalog_sync_worker = FakeWorker()
+        self.platform = FakePlatformReader()
 
     async def close(self) -> None:
         await self.redis_client.aclose()
@@ -418,7 +434,22 @@ def test_incidences_endpoints_are_gone(monkeypatch) -> None:
 
 def test_reports_endpoint_is_gone(monkeypatch) -> None:
     with _build_client(monkeypatch) as client:
+        # El antiguo /reports (listado por monitoring) sigue eliminado.
         assert client.get("/reports", params={"region": "BO"}).status_code == 404
+
+
+def test_reports_by_dag_endpoint_is_tolerant(monkeypatch) -> None:
+    with _build_client(monkeypatch) as client:
+        resp = client.get("/reports/by-dag/D_BO_0001")
+        assert resp.status_code == 200
+        assert resp.json() == []  # platform_db no disponible → lista vacía, no error
+
+
+def test_files_enrichment_endpoint_is_tolerant(monkeypatch) -> None:
+    with _build_client(monkeypatch) as client:
+        resp = client.get("/files/enrichment", params={"region": "BO"})
+        assert resp.status_code == 200
+        assert resp.json() == {}  # platform_db no disponible → dict vacío
 
 
 def test_urls_by_task_and_excel_export(monkeypatch) -> None:

@@ -106,4 +106,25 @@ async def list_files(
         params.extend([limit, offset])
 
         rows = await conn.fetch(query, *params)
-        return [dict(row) for row in rows]
+
+    result = [dict(row) for row in rows]
+
+    # Enriquecimiento aditivo desde platform_db (tolerante: {} si no disponible).
+    enrichment = await request.app.state.factory.platform.file_enrichment()
+    for row in result:
+        info = enrichment.get(row["dag_id"], {})
+        row["name"] = info.get("name")
+        row["main_url"] = info.get("main_url")
+        row["path"] = info.get("path")
+        row["updated_to"] = info.get("updated_to")
+    return result
+
+
+@router.get("/enrichment")
+async def files_enrichment(request: Request, region: str = Query("BO")):
+    """Dict {dag_id: {name, main_url, path, updated_to}} desde platform_db.
+
+    Capa transversal para que el Dashboard enriquezca cualquier tabla por dag_id sin
+    duplicar lógica. Devuelve {} si platform_db no está disponible. ``region`` se acepta
+    por simetría (file.code ya codifica la región en el dag_id)."""
+    return await request.app.state.factory.platform.file_enrichment()
